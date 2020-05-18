@@ -18,36 +18,32 @@
  */
 package org.apache.pulsar.tests.integration.io;
 
-import com.github.dockerjava.api.command.CreateContainerCmd;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.util.Map;
-import java.util.function.Consumer;
 import lombok.Data;
-import lombok.EqualsAndHashCode;
-import lombok.ToString;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.pulsar.client.api.Schema;
 import org.apache.pulsar.client.api.schema.SchemaDefinition;
 import org.apache.pulsar.client.impl.schema.AvroSchema;
 import org.apache.pulsar.tests.integration.topologies.PulsarCluster;
-import org.testcontainers.containers.MySQLContainer;
+import org.testcontainers.containers.PostgreSQLContainer;
 
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.fail;
+
 /**
  * A tester for testing jdbc sink.
- * This will use MySql as DB server
+ * This will use Postgres as DB server
  */
 @Slf4j
-public class JdbcSinkTester extends SinkTester<MySQLContainer> {
+public class JdbcPostgresSinkTester extends SinkTester<PostgreSQLContainer> {
 
     /**
      * A Simple class to test jdbc class，
-     *
      */
     @Data
     public static class Foo {
@@ -56,15 +52,15 @@ public class JdbcSinkTester extends SinkTester<MySQLContainer> {
         private int field3;
     }
 
-    private static final String NAME = "jdbc";
-    private static final String MYSQL = "mysql";
+    private static final String NAME = "jdbc-postgres";
+    private static final String POSTGRES = "postgres";
 
-    private AvroSchema<Foo> schema = AvroSchema.of(SchemaDefinition.<Foo>builder().withPojo(Foo.class).build());
-    private String tableName = "test";
+    private final AvroSchema<Foo> schema = AvroSchema.of(SchemaDefinition.<Foo>builder().withPojo(Foo.class).build());
+    private final String tableName = "test";
     private Connection connection;
 
-    public JdbcSinkTester() {
-        super(NAME, SinkType.JDBC);
+    public JdbcPostgresSinkTester() {
+        super(NAME, SinkType.JDBC_POSTGRES);
 
         // container default value is test
         sinkConfig.put("userName", "test");
@@ -81,27 +77,16 @@ public class JdbcSinkTester extends SinkTester<MySQLContainer> {
     }
 
     @Override
-    protected MySQLContainer createSinkService(PulsarCluster cluster) {
-        return (MySQLContainer) new MySQLContainer()
-            .withUsername("test")
-            .withPassword("test")
-            .withDatabaseName("test")
-            .withNetworkAliases(MYSQL)
-            .withCreateContainerCmdModifier(new Consumer<CreateContainerCmd>() {
-                @Override
-                public void accept(CreateContainerCmd createContainerCmd) {
-                    createContainerCmd
-                        .withName(MYSQL)
-                        .withHostName(cluster.getClusterName() + "-" + MYSQL);
-                }
-            });
+    protected PostgreSQLContainer createSinkService(PulsarCluster cluster) {
+        return (PostgreSQLContainer) new PostgreSQLContainer()
+            .withNetworkAliases(POSTGRES);
     }
 
     @Override
     public void prepareSink() throws Exception {
         String jdbcUrl = serviceContainer.getJdbcUrl();
-        // we need set mysql server address in cluster network.
-        sinkConfig.put("jdbcUrl", "jdbc:mysql://" + MYSQL + ":3306/test");
+        // we need set postgres server address in cluster network.
+        sinkConfig.put("jdbcUrl", "jdbc:postgresql://" + POSTGRES + ":5432/test");
         String driver = serviceContainer.getDriverClassName();
         Class.forName(driver);
 
@@ -117,14 +102,16 @@ public class JdbcSinkTester extends SinkTester<MySQLContainer> {
 
     @Override
     public void validateSinkResult(Map<String, String> kvs) {
-        log.info("Query table content from mysql server: {}", tableName);
+        log.info("Query table content from postgres server: {}", tableName);
         String querySql = "SELECT * FROM " + tableName;
         ResultSet rs;
         try {
             // backend flush may not complete.
             Thread.sleep(1000);
 
-            PreparedStatement statement = connection.prepareStatement(querySql);
+            PreparedStatement statement = connection.prepareStatement(querySql,
+                ResultSet.TYPE_SCROLL_INSENSITIVE,
+                ResultSet.CONCUR_UPDATABLE);
             rs = statement.executeQuery();
 
             if (kvs.get("ACTION").equals("DELETE")) {
@@ -146,7 +133,6 @@ public class JdbcSinkTester extends SinkTester<MySQLContainer> {
         } catch (Exception e) {
             log.error("Got exception: ", e);
             fail("Got exception when op sql.");
-            return;
         }
     }
 }
